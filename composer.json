@@ -1,0 +1,16 @@
+{
+    "name": "routiller/routiller",
+    "description": "Laravel-like REST API routing for WordPress plugins. Conflict-free, multi-plugin safe.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["wordpress", "routing", "rest-api", "laravel-like"],
+    "require": {
+        "php": ">=7.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Routiller\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}
