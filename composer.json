@@ -4,6 +4,12 @@
     "type": "library",
     "license": "MIT",
     "keywords": ["wordpress", "routing", "rest-api", "laravel-like"],
+    "authors": [
+        {
+            "name": "Iftakharul Islam",
+            "email": "iftakharulislam881@gmail.com"
+        }
+    ],
     "require": {
         "php": ">=7.4"
     },
