@@ -9,6 +9,7 @@ use Routiller\Contracts\ValidatorInterface;
 use Routiller\Contracts\SanitizerInterface;
 use Routiller\Contracts\PermissionInterface;
 use Routiller\Contracts\SchemaInterface;
+use Routiller\Contracts\MiddlewareInterface;
 
 /**
  * Registers Routiller routes with the WordPress REST API.
@@ -23,8 +24,35 @@ class Registrar {
     /** @var Route[] */
     protected $routes = [];
 
+    /** @var callable|null Builds controller, permission, middleware, validator and sanitizer instances. */
+    protected $resolver;
+
     public function __construct( string $namespace ) {
         $this->namespace = $namespace;
+    }
+
+    /**
+     * Set the class resolver (e.g. a DI container's get/make method).
+     *
+     * @param callable|null $resolver fn( string $class ): object
+     */
+    public function setResolver( ?callable $resolver ) {
+        $this->resolver = $resolver;
+    }
+
+    /**
+     * Build an instance of a class through the resolver, or `new`.
+     *
+     * @param string $class
+     *
+     * @return object
+     */
+    protected function make( $class ) {
+        if ( $this->resolver ) {
+            return call_user_func( $this->resolver, $class );
+        }
+
+        return new $class();
     }
 
     /**
@@ -43,13 +71,11 @@ class Registrar {
      */
     public function registerRestRoutes() {
         foreach ( $this->routes as $route ) {
-            $uri        = '/' . $route->uri;
-            $controller = $route->controller;
-            $method     = $route->method;
+            $uri = '/' . $route->uri;
 
             $routeArgs = [
                 'methods'             => $route->http_verb,
-                'callback'            => [ new $controller(), $method ],
+                'callback'            => $this->buildCallback( $route ),
                 'args'                => $this->prepareArgs( $route ),
                 'permission_callback' => $this->buildPermissionCallback( $route ),
             ];
@@ -60,6 +86,40 @@ class Registrar {
 
             register_rest_route( $this->namespace, $uri, $routeArgs );
         }
+    }
+
+    /**
+     * Build the route callback: the controller is created only when the
+     * route runs, then the request passes through the route's middleware.
+     *
+     * @param Route $route
+     *
+     * @return callable
+     */
+    protected function buildCallback( Route $route ) {
+        return function ( WP_REST_Request $request ) use ( $route ) {
+            $controller = $this->make( $route->controller );
+            $method     = $route->method;
+
+            $pipeline = function ( WP_REST_Request $request ) use ( $controller, $method ) {
+                return $controller->{$method}( $request );
+            };
+
+            foreach ( array_reverse( $route->middleware ) as $middlewareClass ) {
+                $middleware = $this->make( $middlewareClass );
+
+                if ( ! ( $middleware instanceof MiddlewareInterface ) ) {
+                    continue;
+                }
+
+                $next     = $pipeline;
+                $pipeline = function ( WP_REST_Request $request ) use ( $middleware, $next ) {
+                    return $middleware->handle( $request, $next );
+                };
+            }
+
+            return $pipeline( $request );
+        };
     }
 
     /**
@@ -91,7 +151,7 @@ class Registrar {
         $schemaClass = $route->schema;
 
         return function () use ( $schemaClass ) {
-            $schema = new $schemaClass();
+            $schema = $this->make( $schemaClass );
 
             if ( $schema instanceof SchemaInterface ) {
                 return $schema->schema();
@@ -114,11 +174,10 @@ class Registrar {
             return true;
         }
 
-        $results    = [];
-        $has_errors = false;
+        $results = [];
 
         foreach ( $permissions as $permissionClass ) {
-            $permission = new $permissionClass();
+            $permission = $this->make( $permissionClass );
 
             if ( ! ( $permission instanceof PermissionInterface ) ) {
                 continue;
@@ -126,20 +185,18 @@ class Registrar {
 
             $result = $permission->check( $request );
 
-            if ( is_wp_error( $result ) ) {
-                $has_errors = true;
+            // OR logic: the first permission that grants access wins.
+            if ( true === $result ) {
+                return true;
             }
 
             $results[] = $result;
         }
 
-        if ( $has_errors ) {
-            return $this->mergeErrors( $results );
-        }
-
-        // If any permission returned true, allow access (OR logic)
-        if ( in_array( true, $results, true ) ) {
-            return true;
+        foreach ( $results as $result ) {
+            if ( is_wp_error( $result ) ) {
+                return $this->mergeErrors( $results );
+            }
         }
 
         return false;
@@ -187,8 +244,7 @@ class Registrar {
         $args = [];
 
         if ( $route->validator ) {
-            $request   = $this->buildRequestObject( $route );
-            $validator = new $route->validator( $request );
+            $validator = $this->makeWithRequestFallback( $route->validator, $route );
 
             if ( $validator instanceof ValidatorInterface ) {
                 $args = $this->applyValidation( $args, $validator );
@@ -196,8 +252,7 @@ class Registrar {
         }
 
         if ( $route->sanitizer ) {
-            $request   = isset( $request ) ? $request : $this->buildRequestObject( $route );
-            $sanitizer = new $route->sanitizer( $request );
+            $sanitizer = $this->makeWithRequestFallback( $route->sanitizer, $route );
 
             if ( $sanitizer instanceof SanitizerInterface ) {
                 $args = $this->applySanitization( $args, $sanitizer );
@@ -205,6 +260,26 @@ class Registrar {
         }
 
         return $args;
+    }
+
+    /**
+     * Build a validator or sanitizer.
+     *
+     * Classes get the real request in validate()/sanitize(). For backward
+     * compatibility with 1.0 classes whose constructor requires a request,
+     * fall back to a request built from the current HTTP globals.
+     *
+     * @param string $class
+     * @param Route  $route
+     *
+     * @return object
+     */
+    protected function makeWithRequestFallback( $class, Route $route ) {
+        try {
+            return $this->make( $class );
+        } catch ( \ArgumentCountError $e ) {
+            return new $class( $this->buildRequestObject( $route ) );
+        }
     }
 
     /**

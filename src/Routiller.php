@@ -87,6 +87,27 @@ class Routiller {
     }
 
     /**
+     * Resolve controllers, permissions, middleware, validators, sanitizers
+     * and schemas through your own factory (e.g. a DI container).
+     *
+     *   Routiller::create( 'my-plugin/v1' )
+     *       ->resolver( function ( $class ) use ( $container ) {
+     *           return $container->get( $class );
+     *       } );
+     *
+     * Without a resolver, classes are built with `new $class()`.
+     *
+     * @param callable|null $resolver fn( string $class ): object
+     *
+     * @return $this
+     */
+    public function resolver( ?callable $resolver ) {
+        $this->registrar->setResolver( $resolver );
+
+        return $this;
+    }
+
+    /**
      * Get the REST namespace.
      *
      * @return string

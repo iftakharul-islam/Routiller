@@ -103,6 +103,44 @@ class AdminOnly implements PermissionInterface {
 
 Multiple permissions use OR logic — if any returns `true`, access is granted.
 
+Group permissions and route permissions are merged into one list, and the list is OR'd. A group `Authentic` permission plus a route `AdminOnly` permission lets any logged-in user through. Put the strictest check on each route, and use middleware for checks that must always pass (AND).
+
+## Middleware
+
+Implement `Routiller\Contracts\MiddlewareInterface`. Middleware runs after the permission check and wraps the controller call, in the order it was added (group middleware first).
+
+```php
+use Routiller\Contracts\MiddlewareInterface;
+use WP_REST_Request;
+
+class ModuleEnabled implements MiddlewareInterface {
+    public function handle( WP_REST_Request $request, callable $next ) {
+        if ( ! get_option( 'my_plugin_projects_enabled' ) ) {
+            return new \WP_Error( 'module_disabled', 'Projects are turned off.', ['status' => 404] );
+        }
+
+        return $next( $request );
+    }
+}
+
+$router->group( ['prefix' => 'projects', 'middleware' => [ModuleEnabled::class]], function ( $router ) {
+    $router->get( '', [ProjectController::class, 'index'] );
+});
+```
+
+## Dependency Injection
+
+By default every class is built with `new $class()`. Pass a resolver to build controllers, permissions, middleware, validators, sanitizers and schemas through your container:
+
+```php
+Routiller::create( 'my-plugin/v1' )
+    ->resolver( function ( $class ) use ( $container ) {
+        return $container->get( $class );
+    } );
+```
+
+Controllers are created only when their route is called, not when routes are registered.
+
 ## Validators
 
 Implement `Routiller\Contracts\ValidatorInterface`:

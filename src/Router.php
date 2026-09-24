@@ -28,7 +28,7 @@ class Router {
     /** @var array Permissions applied to all routes in this group */
     protected $groupPermissions = [];
 
-    public function __construct( UriParser $uriParser = null ) {
+    public function __construct( ?UriParser $uriParser = null ) {
         $this->uriParser = $uriParser ?: new UriParser();
     }
 
